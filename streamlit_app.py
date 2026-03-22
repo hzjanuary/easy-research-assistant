@@ -119,8 +119,8 @@ def stream_chat_response(
                             
                             if "response" in parsed:
                                 response_text = parsed["response"]
-                                if response_text:
-                                    yield response_text
+                                if response_text is not None:
+                                    yield str(response_text)
                             
                         except json.JSONDecodeError:
                             yield data
@@ -274,10 +274,13 @@ def render_chat():
                         max_tokens=st.session_state.max_tokens
                     ):
                         if chunk is not None:
+                            chunk_text = chunk if isinstance(chunk, str) else str(chunk)
+                            if not chunk_text:
+                                continue
                             # Update status once we start getting response
                             if not full_response:
                                 search_status.update(label="✅ Search complete - generating response...", state="complete")
-                            full_response += chunk
+                            full_response += chunk_text
                             response_placeholder.markdown(full_response + "▌")
             else:
                 for chunk in stream_chat_response(
@@ -288,7 +291,10 @@ def render_chat():
                     max_tokens=st.session_state.max_tokens
                 ):
                     if chunk is not None:
-                        full_response += chunk
+                        chunk_text = chunk if isinstance(chunk, str) else str(chunk)
+                        if not chunk_text:
+                            continue
+                        full_response += chunk_text
                         response_placeholder.markdown(full_response + "▌")
             
             response_placeholder.markdown(full_response)

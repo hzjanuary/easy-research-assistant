@@ -383,6 +383,7 @@ async def execute_inference_with_fallback(
         if error_encountered and error_code is not None:
             is_rate_limit = error_code == 429
             is_server_error = 500 <= error_code < 600
+            is_auth_error = error_code in (401, 403)
             
             if is_rate_limit or is_server_error:
                 provider_manager.mark_node_failed(node.node_id, is_rate_limit, config.COOLDOWN_MINUTES)
@@ -391,6 +392,20 @@ async def execute_inference_with_fallback(
                 if stream:
                     yield json.dumps({
                         "info": f"Provider {node.name} unavailable, switching..."
+                    })
+                continue
+            elif is_auth_error:
+                # Treat provider auth errors as node-specific misconfiguration.
+                # Do not fail the whole request; move to next available provider.
+                provider_manager.mark_node_failed(node.node_id, True, config.COOLDOWN_MINUTES)
+                _add_log(
+                    "WARNING",
+                    f"Provider {node.name} authentication failed (HTTP {error_code}), switching node",
+                    node.name
+                )
+                if stream:
+                    yield json.dumps({
+                        "info": f"Provider {node.name} auth failed, switching provider..."
                     })
                 continue
             else:
