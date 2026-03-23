@@ -1,6 +1,7 @@
 """Search Tool - Real-Time Web Search for RAG (Retrieval-Augmented Generation)."""
 import importlib
 import logging
+import os
 import re
 from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timezone
@@ -25,6 +26,17 @@ for module_name in ("ddgs", "duckduckgo_search"):
 
 if not DDGS_AVAILABLE:
     logger.warning("ddgs/duckduckgo-search not installed. Web search will be disabled.")
+
+# Try to import Tavily client.
+TAVILY_AVAILABLE = False
+TavilyClient = None
+
+try:
+    from tavily import TavilyClient as _TavilyClient
+    TavilyClient = _TavilyClient
+    TAVILY_AVAILABLE = True
+except ImportError:
+    logger.info("tavily-python not installed. Tavily search will be unavailable.")
 
 
 def _normalize_text(text: str) -> str:
@@ -201,25 +213,96 @@ def _run_news_search(ddgs: Any, query: str, max_results: int) -> List[Dict]:
     return []
 
 
+def _get_search_provider() -> str:
+    """Return the configured search provider name ('ddg' or 'tavily')."""
+    return os.environ.get("SEARCH_PROVIDER", "ddg").strip().lower()
+
+
+def _get_web_search_tavily(query: str, max_results: int = 3) -> str:
+    """
+    Perform a web search using Tavily and return formatted results.
+
+    Returns an empty string on failure or if Tavily is not configured.
+    """
+    if not TAVILY_AVAILABLE or TavilyClient is None:
+        logger.warning("Tavily search not available (tavily-python not installed)")
+        return ""
+
+    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        logger.warning("TAVILY_API_KEY not set. Cannot use Tavily search.")
+        return ""
+
+    try:
+        logger.info(f"Tavily search for: {query[:80]}...")
+        client = TavilyClient(api_key=api_key)
+        response = client.search(
+            query=query,
+            max_results=max_results,
+            search_depth="advanced",
+            topic="general",
+        )
+
+        results: List[Dict] = []
+        for item in response.get("results", []):
+            results.append({
+                "title": item.get("title", "No title"),
+                "body": item.get("content", "No description"),
+                "href": item.get("url", ""),
+                "source": "Tavily",
+                "date": item.get("published_date", ""),
+            })
+
+        if not results:
+            logger.info("Tavily returned no results")
+            return ""
+
+        formatted = format_search_results(results)
+        logger.info(f"Tavily returned {len(results)} results")
+        return formatted
+
+    except Exception as e:
+        logger.error(f"Tavily search failed: {e}")
+        return ""
+
+
 def get_web_search(query: str, max_results: int = 3) -> str:
     """
-    Perform a web search using DuckDuckGo and return formatted results.
-    
+    Perform a web search and return formatted results.
+
+    The search provider is selected via the SEARCH_PROVIDER env var
+    ('ddg' or 'tavily', default 'ddg'). If the primary provider fails
+    and Tavily is configured, Tavily is used as an automatic fallback.
+
     Args:
         query: The search query string
         max_results: Maximum number of results to return (default: 3)
-    
+
     Returns:
         A formatted string containing search results with titles, snippets, and URLs.
         Returns an empty string if search fails or no results found.
     """
+    provider = _get_search_provider()
+
+    # If Tavily is explicitly selected, use it directly.
+    if provider == "tavily":
+        result = _get_web_search_tavily(query, max_results)
+        if result:
+            return result
+        logger.warning("Tavily selected but returned no results; falling back to DuckDuckGo")
+
+    # DuckDuckGo path (default).
     if not DDGS_AVAILABLE:
         logger.warning("DuckDuckGo Search not available")
+        # Attempt Tavily fallback if key is configured.
+        if TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY", "").strip():
+            logger.info("Attempting Tavily fallback")
+            return _get_web_search_tavily(query, max_results)
         return ""
     if DDGS is None:
         logger.warning("DDGS class not available at runtime")
         return ""
-    
+
     try:
         logger.info(f"Searching web for: {query[:80]}...")
 
@@ -285,7 +368,11 @@ def get_web_search(query: str, max_results: int = 3) -> str:
         return formatted_results
     
     except Exception as e:
-        logger.error(f"Web search failed: {str(e)}")
+        logger.error(f"DuckDuckGo search failed: {str(e)}")
+        # Automatic Tavily fallback when DuckDuckGo raises an exception.
+        if TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY", "").strip():
+            logger.info("Attempting Tavily fallback after DuckDuckGo failure")
+            return _get_web_search_tavily(query, max_results)
         return ""
 
 
