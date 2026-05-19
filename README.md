@@ -1,6 +1,6 @@
-# easyResearchAssistant
-
 <div align="center">
+  
+# easyResearchAssistant
 
 **High-Availability AI Inference Gateway**
 
